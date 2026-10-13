@@ -1,0 +1,230 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>ULTRA!TETRIS</title>
+<style>
+  *{box-sizing:border-box} html,body{height:100%;margin:0}
+  body{background:#070b14;color:#eef5ff;font-family:Consolas,Monaco,monospace;overflow:hidden}
+  canvas{display:block;width:100vw;height:100vh;image-rendering:pixelated}
+</style>
+</head>
+<body>
+<canvas id="c"></canvas>
+<script>
+(()=>{
+"use strict";
+const c=document.getElementById("c"),x=c.getContext("2d");
+let W=960,H=640,state="menu",sel=0,last=0,accum=0,score=0,lines=0,level=0,gameOver=false;
+let frame=0,grav=0,keyL=false,keyR=false,keyD=false,das=0,dasDir=0;
+const menu=["PLAY GAME","HELP","ABOUT","EXIT"];
+const COL=["#0000","#40e0ff","#ffe44d","#b45cff","#54e36b","#ff5964","#4b75ff","#ff9b42"];
+const SHAPES=[
+ [[1,1,1,1]], [[2,2],[2,2]], [[0,3,0],[3,3,3]], [[0,4,4],[4,4,0]],
+ [[5,5,0],[0,5,5]], [[6,0,0],[6,6,6]], [[0,0,7],[7,7,7]]
+];
+let board,piece,next;
+
+function resize(){c.width=W=devicePixelRatio*innerWidth;c.height=H=devicePixelRatio*innerHeight;x.setTransform(devicePixelRatio,0,0,devicePixelRatio,0,0);W=innerWidth;H=innerHeight}
+addEventListener("resize",resize);resize();
+
+function fresh(){
+ board=Array.from({length:20},()=>Array(10).fill(0)); score=lines=0;level=0;gameOver=false;frame=grav=das=dasDir=0;
+ next=make(); spawn();
+}
+function make(){let i=(Math.random()*SHAPES.length)|0;return {m:SHAPES[i].map(r=>r.slice()),v:i+1,x:3,y:0}}
+function spawn(){piece=next||make();piece.x=3;piece.y=0;next=make();if(hit(piece,0,0,piece.m)){gameOver=true;sfx("gameover")}}
+function hit(p,dx,dy,m){
+ for(let y=0;y<m.length;y++)for(let xx=0;xx<m[y].length;xx++)if(m[y][xx]){
+  let X=p.x+xx+dx,Y=p.y+y+dy;
+  if(X<0||X>=10||Y>=20||(Y>=0&&board[Y][X]))return true;
+ } return false;
+}
+function rotate(){
+ let m=piece.m[0].map((_,i)=>piece.m.map(r=>r[i]).reverse());
+ for(const k of [0,-1,1,-2,2])if(!hit(piece,k,0,m)){piece.x+=k;piece.m=m;sfx("rotate");return}
+}
+function lock(){
+ sfx("lock");
+ piece.m.forEach((r,y)=>r.forEach((v,xx)=>{if(v&&piece.y+y>=0)board[piece.y+y][piece.x+xx]=piece.v}));
+ let n=0;
+ for(let y=19;y>=0;y--)if(board[y].every(Boolean)){board.splice(y,1);board.unshift(Array(10).fill(0));n++;y++}
+ if(n){
+  sfx("line");
+  score += [0,40,100,300,1200][n]*(level+1);
+  lines += n;
+  level = Math.floor(lines/10);
+ }
+ spawn();
+}
+function hard(){sfx("hard");let n=0;while(!hit(piece,0,1,piece.m)){piece.y++;n++}score+=n*2;lock()}
+// Game Boy Tetris-inspired 60 Hz engine.
+// Frames per automatic row by level, approximating the original gravity curve.
+const GB_GRAV=[53,49,45,41,37,33,28,22,17,11,10,9,8,7,6,6,5,5,4,4,3];
+function step60(){
+ if(state!=="game"||gameOver)return;
+ frame++;
+
+ // Horizontal delayed auto shift: immediate move, pause, then repeat.
+ let dir=keyL?-1:(keyR?1:0);
+ if(dir!==dasDir){
+  dasDir=dir;das=0;
+  if(dir&&!hit(piece,dir,0,piece.m)){piece.x+=dir;sfx("move")}
+ }else if(dir){
+  das++;
+  if(das>=16 && ((das-16)%6===0) && !hit(piece,dir,0,piece.m)){piece.x+=dir;sfx("move")}
+ }else das=0;
+
+ // Down key supplies fast soft-drop gravity and awards a point per manually dropped row.
+ let period=keyD?2:(GB_GRAV[Math.min(level,GB_GRAV.length-1)]||3);
+ grav++;
+ if(grav>=period){
+  grav=0;
+  if(!hit(piece,0,1,piece.m)){piece.y++;if(keyD){score++;sfx("soft")}}
+  else lock();
+ }
+}
+function tick(dt){
+ accum+=Math.min(dt,100);
+ while(accum>=1000/60){step60();accum-=1000/60}
+}
+let OST=null,ostTimer=null;
+function stopOST(){
+ if(ostTimer){clearInterval(ostTimer);ostTimer=null}
+ if(OST){try{OST.close()}catch(e){} OST=null}
+}
+function startOST(){
+ stopOST();
+ OST=new (window.AudioContext||window.webkitAudioContext)();
+ OST.resume();
+
+ // "Korobeiniki" — traditional Russian folk melody, synthesized in-browser.
+ const N={
+  E5:659.25,B4:493.88,C5:523.25,D5:587.33,A4:440,
+  A5:880,G5:783.99,F5:698.46,E4:329.63,C4:261.63,
+  D4:293.66,A3:220,B3:246.94,G3:196,F3:174.61
+ };
+ // note, duration units (classic opening phrase + continuation)
+ const melody=[
+  ["E5",2],["B4",1],["C5",1],["D5",2],["C5",1],["B4",1],
+  ["A4",2],["A4",1],["C5",1],["E5",2],["D5",1],["C5",1],
+  ["B4",3],["C5",1],["D5",2],["E5",2],
+  ["C5",2],["A4",2],["A4",4],
+  ["D5",3],["F5",1],["A5",2],["G5",1],["F5",1],
+  ["E5",3],["C5",1],["E5",2],["D5",1],["C5",1],
+  ["B4",2],["B4",1],["C5",1],["D5",2],["E5",2],
+  ["C5",2],["A4",2],["A4",4]
+ ];
+ const bass=["A3","E4","A3","E4","F3","C4","G3","D4"];
+ let mi=0,bi=0;
+
+ function tone(freq,t,dur,type,vol){
+  const o=OST.createOscillator(),g=OST.createGain();
+  o.type=type;o.frequency.value=freq;
+  g.gain.setValueAtTime(vol,t);
+  g.gain.exponentialRampToValueAtTime(.001,t+dur*.9);
+  o.connect(g);g.connect(OST.destination);o.start(t);o.stop(t+dur);
+ }
+ function schedule(){
+  if(state!=="game"||gameOver){stopOST();return}
+  const beat=.115, ahead=2.2, now=OST.currentTime;
+  let t=now+.04;
+  while(t<now+ahead){
+   let [n,d]=melody[mi];
+   tone(N[n],t,beat*d*.92,"square",.045);
+   tone(N[bass[bi%bass.length]],t,beat*1.8,"triangle",.028);
+   t+=beat*d; mi=(mi+1)%melody.length; bi++;
+  }
+ }
+ schedule();
+ ostTimer=setInterval(schedule,1900);
+}
+function sfx(kind){
+ if(!OST||OST.state==="closed")return;
+ const t=OST.currentTime;
+ function blip(f1,f2,d=.055,type="square",vol=.07){
+  const o=OST.createOscillator(),g=OST.createGain();
+  o.type=type;o.frequency.setValueAtTime(f1,t);
+  o.frequency.exponentialRampToValueAtTime(Math.max(30,f2),t+d);
+  g.gain.setValueAtTime(vol,t);g.gain.exponentialRampToValueAtTime(.001,t+d);
+  o.connect(g);g.connect(OST.destination);o.start(t);o.stop(t+d);
+ }
+ if(kind==="move") blip(180,145,.035,"square",.035);
+ if(kind==="rotate") blip(330,500,.055,"square",.045);
+ if(kind==="soft") blip(120,100,.025,"square",.025);
+ if(kind==="hard") blip(210,65,.09,"square",.075);
+ if(kind==="lock") blip(95,55,.075,"square",.065);
+ if(kind==="line"){
+  [523.25,659.25,783.99,1046.5].forEach((f,i)=>{
+   setTimeout(()=>{if(OST&&OST.state!=="closed"){
+    const tt=OST.currentTime,o=OST.createOscillator(),g=OST.createGain();
+    o.type="square";o.frequency.value=f;g.gain.setValueAtTime(.06,tt);
+    g.gain.exponentialRampToValueAtTime(.001,tt+.07);
+    o.connect(g);g.connect(OST.destination);o.start(tt);o.stop(tt+.08);
+   }},i*45);
+  });
+ }
+ if(kind==="gameover") blip(220,55,.35,"sawtooth",.06);
+}
+function text(s,y,size=24,color="#eef5ff"){x.fillStyle=color;x.font=`bold ${size}px Consolas,monospace`;x.textAlign="center";x.fillText(s,innerWidth/2,y)}
+function bg(){
+ x.fillStyle="#070b14";x.fillRect(0,0,innerWidth,innerHeight);
+ x.strokeStyle="#14233b";x.lineWidth=1;
+ for(let i=0;i<innerWidth;i+=32){x.beginPath();x.moveTo(i,0);x.lineTo(i,innerHeight);x.stroke()}
+ for(let i=0;i<innerHeight;i+=32){x.beginPath();x.moveTo(0,i);x.lineTo(innerWidth,i);x.stroke()}
+}
+function menuDraw(){
+ bg(); text("ULTRA!TETRIS",120,54,"#40e0ff");text("60 FPS BLOCK SYSTEM",155,15,"#7990ad");
+ menu.forEach((m,i)=>{let y=250+i*55;if(i===sel){x.fillStyle="#12233d";x.fillRect(innerWidth/2-150,y-32,300,44)}text((i===sel?"> ":"")+m+(i===sel?" <":""),y,23,i===sel?"#ffe44d":"#dce8fa")});
+ text("↑ ↓  SELECT     ENTER  CONFIRM",innerHeight-45,15,"#7990ad");
+}
+function block(px,py,s,v){
+ x.fillStyle=COL[v];x.fillRect(px+1,py+1,s-2,s-2);x.fillStyle="#ffffff33";x.fillRect(px+3,py+3,s-6,3);
+}
+function gameDraw(){
+ bg();let S=Math.min(28,(innerHeight-70)/20),ox=innerWidth/2-S*5,oy=35;
+ x.fillStyle="#09111f";x.fillRect(ox-4,oy-4,S*10+8,S*20+8);
+ x.strokeStyle="#40e0ff";x.lineWidth=2;x.strokeRect(ox-4,oy-4,S*10+8,S*20+8);
+ for(let y=0;y<20;y++)for(let xx=0;xx<10;xx++){x.strokeStyle="#13223a";x.strokeRect(ox+xx*S,oy+y*S,S,S);if(board[y][xx])block(ox+xx*S,oy+y*S,S,board[y][xx])}
+ piece.m.forEach((r,y)=>r.forEach((v,xx)=>{if(v)block(ox+(piece.x+xx)*S,oy+(piece.y+y)*S,S,piece.v)}));
+ x.textAlign="left";x.font="bold 18px Consolas";x.fillStyle="#eef5ff";
+ x.fillText("SCORE "+score,ox+S*10+35,90);x.fillText("LINES "+lines,ox+S*10+35,120);x.fillText("LEVEL "+level,ox+S*10+35,150);
+ x.fillStyle="#7990ad";x.font="14px Consolas";x.fillText("NEXT",ox+S*10+35,205);
+ next.m.forEach((r,y)=>r.forEach((v,xx)=>{if(v)block(ox+S*10+35+xx*20,225+y*20,20,next.v)}));
+ x.fillText("← → MOVE",ox-S*5,120);x.fillText("↑ ROTATE",ox-S*5,145);x.fillText("↓ SOFT DROP",ox-S*5,170);x.fillText("NO HOLD / NO HARD DROP",ox-S*5,195);x.fillText("ESC MENU",ox-S*5,220);
+ if(gameOver){x.fillStyle="#000b";x.fillRect(0,0,innerWidth,innerHeight);text("GAME OVER",innerHeight/2-10,44,"#ff5964");text("ENTER TO RESTART • ESC FOR MENU",innerHeight/2+35,17)}
+}
+function page(title,body){
+ bg();text(title,120,44,"#40e0ff");body.forEach((s,i)=>text(s,220+i*38,18,i===0?"#eef5ff":"#9fb0c7"));text("ESC / ENTER — BACK",innerHeight-55,16,"#ffe44d");
+}
+addEventListener("keydown",e=>{
+ if(state==="menu"){
+  if(e.key==="ArrowUp")sel=(sel+3)%4;if(e.key==="ArrowDown")sel=(sel+1)%4;
+  if(e.key==="Enter"){if(sel===0){fresh();state="game";startOST()}if(sel===1)state="help";if(sel===2)state="about";if(sel===3)state="exit"}
+ }else if(state==="game"){
+  if(gameOver&&e.key==="Enter"){fresh();startOST();return}
+  if(e.key==="Escape"){stopOST();state="menu";return}
+  if(gameOver)return;
+  if(e.key==="ArrowLeft"){keyL=true;e.preventDefault()}
+  if(e.key==="ArrowRight"){keyR=true;e.preventDefault()}
+  if(e.key==="ArrowDown"){keyD=true;e.preventDefault()}
+  if(e.key==="ArrowUp"){rotate();e.preventDefault()}
+  if(e.code==="Space"){e.preventDefault()}
+ }else if(e.key==="Escape"||e.key==="Enter")state="menu";
+});
+addEventListener("keyup",e=>{
+ if(e.key==="ArrowLeft")keyL=false;
+ if(e.key==="ArrowRight")keyR=false;
+ if(e.key==="ArrowDown")keyD=false;
+});
+function loop(t){let dt=t-last;last=t;tick(dt);
+ if(state==="menu")menuDraw();else if(state==="game")gameDraw();
+ else if(state==="help")page("HELP",["GAME BOY-STYLE CLASSIC TETRIS ENGINE.","← → = MOVE   ↑ = ROTATE   ↓ = SOFT DROP","NO HOLD, GHOST PIECE, OR HARD DROP.","60 HZ LOGIC • GRAVITY SPEEDS UP EVERY 10 LINES."]);
+ else if(state==="about")page("ABOUT",["ULTRA!TETRIS","A SINGLE-FILE 60 FPS HTML BLOCK GAME.","GENERATED AUDIO — NO EXTERNAL FILES.","OST PLAYS ONLY DURING GAMEPLAY."]);
+ else page("EXIT",["THANKS FOR PLAYING ULTRA!TETRIS.","YOUR BROWSER WON'T BE CLOSED AUTOMATICALLY.","PRESS ENTER TO RETURN."]);
+ requestAnimationFrame(loop)}
+requestAnimationFrame(loop);
+})();
+</script>
+</body></html>
